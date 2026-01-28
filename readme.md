@@ -1,0 +1,112 @@
+# WP Plugin Scanner
+
+All-in-one WordPress plugin scanner & wordlist generator. Detects installed plugins (even behind WAF/Cloudflare), supports fast/stealthy scan, and can collect plugin lists from WordPress.org.
+
+## Features
+- Multi-threaded, ultra-fast scan (default 50 threads)
+- Stealthy mode: random UA, WAF bypass, IP spoofing, cache busting
+- Fast mode: 1 request per plugin (7x faster, lower confidence)
+- Custom wordlist and output support
+- Collect mode: tạo wordlist plugin từ WordPress.org (lọc theo số lượng cài đặt)
+
+## Usage
+
+### Scan Mode
+```
+./wp_scanner -u <target_url> [-w wordlist] [-t threads] [-c custom_plugins] [-o output]
+```
+
+### Collect Mode (Tạo wordlist)
+```
+./wp_scanner -collect [-min-installs 100] [-full]
+```
+
+## Options
+
+- `-u string`         : Target WordPress URL (bắt buộc khi scan)
+- `-w string`         : Wordlist file chứa plugin (default: plugins.txt)
+- `-c string`         : File plugin custom (bổ sung thêm vào wordlist)
+- `-o string`         : Output filename (không có extension, sẽ tạo .json và .txt)
+- `-t int`            : Số thread chạy song song (default: 50, nên giảm khi stealthy)
+- `-delay int`        : Delay giữa các request (ms, dùng cho stealthy/slow)
+- `-timeout int`      : Timeout mỗi request (giây, default: 10)
+- `-s`, `-stealthy`   : Bật chế độ stealthy (random UA, WAF bypass, spoof IP, cache bust)
+- `-f`, `-fast`       : Bật chế độ fast (1 request/plugin, 7x nhanh hơn, độ chính xác thấp hơn)
+- `-collect`          : Chế độ collect (tạo wordlist từ WordPress.org)
+- `-min-installs int` : Lọc plugin theo số lượng active installs (dùng với -collect, default: 100)
+- `-full`             : Collect toàn bộ plugin (rất chậm, dùng với -collect)
+- `-h`                : Hiển thị help
+
+## Examples
+
+### Collect plugin wordlist
+```
+./wp_scanner -collect
+./wp_scanner -collect -min-installs 1000
+./wp_scanner -collect -full
+```
+
+### Scan target (fast, 50 threads mặc định)
+```
+./wp_scanner -u https://example.com
+./wp_scanner -u https://example.com -t 100
+```
+
+### Fast mode (7x nhanh hơn, 1 request/plugin)
+```
+./wp_scanner -u https://example.com -f
+./wp_scanner -u https://example.com -f -t 100
+```
+
+### Scan với wordlist và plugin custom
+```
+./wp_scanner -u https://example.com -w my_plugins.txt -c custom.txt
+```
+
+### Scan với output file custom
+```
+./wp_scanner -u https://example.com -o my_report
+```
+
+### Stealthy + Fast (tốt nhất cho site có WAF)
+```
+./wp_scanner -u https://protected-site.com/ -s -f -t 10
+```
+
+### Stealthy mode (bypass WAF/Cloudflare)
+```
+./wp_scanner -u https://protected-site.com/ -s -t 5 -delay 200
+```
+
+### Ultra stealth (WAF mạnh)
+```
+./wp_scanner -u https://protected-site.com/ -s -t 1 -delay 1000
+```
+
+## Wordlist
+Sử dụng file wordlist mặc định `plugins.txt` hoặc tự tạo bằng collect mode. Có thể bổ sung plugin custom qua flag `-c`.
+
+## Build & Install
+
+### Build từ source
+```
+go build -o wp_scanner wp_plugin_scanner.go
+```
+
+### Install bằng Go (global)
+```
+go install
+```
+
+Sau khi install, tool có thể chạy từ bất cứ đâu với lệnh `wp_scanner` (cần đảm bảo $GOPATH/bin trong $PATH).
+
+## Disclaimer & Liability
+
+- **Giấy phép sử dụng**: Công cụ này được cung cấp "as-is" cho mục đích kiểm thử bảo mật có trách nhiệm, đánh giá và nghiên cứu. Người sử dụng chịu trách nhiệm hoàn toàn về cách dùng công cụ.
+- **Không vì mục đích bất hợp pháp**: Không được dùng công cụ để xâm nhập, quét hoặc khai thác các hệ thống mà bạn không có quyền rõ ràng. Việc sử dụng trái phép có thể dẫn đến trách nhiệm hình sự và dân sự.
+- **Không bảo hành**: Tác giả và nhóm phát triển không chịu bất kỳ trách nhiệm nào cho thiệt hại trực tiếp, gián tiếp hay ngẫu nhiên phát sinh từ việc sử dụng công cụ này.
+- **Tác giả / Nhóm**: Đây là sản phẩm của vibe-coding.
+
+Vui lòng đọc kỹ và tuân thủ luật pháp địa phương trước khi sử dụng.
+## License
+MIT

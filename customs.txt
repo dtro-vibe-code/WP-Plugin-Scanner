@@ -1,0 +1,1 @@
+wp-eMember|WooCommerce ext|10.9.4|10000
