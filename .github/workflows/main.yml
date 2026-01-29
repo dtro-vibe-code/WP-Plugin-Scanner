@@ -50,8 +50,8 @@ jobs:
             wp_scanner-macos-amd64
             wp_scanner-macos-arm64
             wp_scanner-windows-amd64.exe
-            ./wp_scanner
             wp_plugin_scanner.go
+            readme.md
           body: |
             # WP Plugin Scanner Release
             
