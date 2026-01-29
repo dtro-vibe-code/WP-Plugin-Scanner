@@ -62,9 +62,22 @@ var acceptLanguages = []string{
 	"en-US,en;q=0.9,vi;q=0.8",
 }
 
-// getRandomUserAgent returns a random user-agent string
+// randString returns a short random alphanumeric string
+func randString(n int) string {
+	letters := "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
+}
+
+// getRandomUserAgent returns a random user-agent string with random suffix for variety
 func getRandomUserAgent() string {
-	return userAgents[rand.Intn(len(userAgents))]
+	base := userAgents[rand.Intn(len(userAgents))]
+	// Append random suffix to create more UA variety
+	suffix := randString(4 + rand.Intn(4)) // 4-7 random chars
+	return base + " " + suffix
 }
 
 // getRandomIP generates a random IP for X-Forwarded-For spoofing
@@ -218,6 +231,44 @@ type Scanner struct {
 	results          []ScanResult
 	vulnerable       []ScanResult
 	mu               sync.Mutex
+	// WAF detection
+	wafMu       sync.Mutex
+	wafDetected bool
+	wafReason   string
+	stopScan    bool
+}
+
+// firstN returns first N chars of string
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// IsWAFDetected returns whether a WAF was detected
+func (s *Scanner) IsWAFDetected() bool {
+	s.wafMu.Lock()
+	defer s.wafMu.Unlock()
+	return s.wafDetected
+}
+
+// SetWAFDetected marks WAF as detected
+func (s *Scanner) SetWAFDetected(reason string) {
+	s.wafMu.Lock()
+	defer s.wafMu.Unlock()
+	if !s.wafDetected {
+		s.wafDetected = true
+		s.wafReason = reason
+		s.stopScan = true
+	}
+}
+
+// ShouldStop returns whether scan should stop
+func (s *Scanner) ShouldStop() bool {
+	s.wafMu.Lock()
+	defer s.wafMu.Unlock()
+	return s.stopScan
 }
 
 // ===================== PLUGIN COLLECTOR =====================
@@ -584,6 +635,16 @@ func (s *Scanner) loadPluginsFromFile(filename string) error {
 			LatestVersion:  version,
 			ActiveInstalls: activeInstalls,
 		}
+		
+		// Normalize invalid version strings to empty
+		invalidVersions := []string{"null", "unknown", "0", "N/A", "n/a", "", "none"}
+		for _, inv := range invalidVersions {
+			if strings.EqualFold(plugin.LatestVersion, inv) {
+				plugin.LatestVersion = ""
+				break
+			}
+		}
+		
 		s.plugins = append(s.plugins, plugin)
 		s.pluginsData[slug] = plugin
 	}
@@ -646,6 +707,16 @@ func (s *Scanner) loadCustomPlugins(filename string) error {
 			}
 
 			plugin := Plugin{Slug: slug, Name: name, LatestVersion: version, ActiveInstalls: activeInstalls}
+			
+			// Normalize invalid version strings to empty
+			invalidVersions := []string{"null", "unknown", "0", "N/A", "n/a", "", "none"}
+			for _, inv := range invalidVersions {
+				if strings.EqualFold(plugin.LatestVersion, inv) {
+					plugin.LatestVersion = ""
+					break
+				}
+			}
+			
 			s.plugins = append(s.plugins, plugin)
 			s.pluginsData[slug] = plugin
 			count++
@@ -734,6 +805,51 @@ func (s *Scanner) CheckPluginExists(slug string) *ScanResult {
 			continue
 		}
 
+		// Check if scan should stop (WAF detected by another goroutine)
+		if s.ShouldStop() {
+			resp.Body.Close()
+			return &ScanResult{Installed: false, Confidence: 0, ConfidenceReason: "scan stopped - WAF detected"}
+		}
+
+		// WAF/Challenge detection - check for common WAF patterns
+		if resp.StatusCode == 429 || resp.StatusCode == 503 || resp.StatusCode == 403 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			content := strings.ToLower(string(body))
+			
+			// Check for WAF/Challenge signatures
+			wafSignatures := []string{
+				"attention required", "checking your browser", "cf-chl-bypass",
+				"browser integrity check", "captcha", "challenge-platform",
+				"please wait while we verify", "ddos protection", "security check",
+				"access denied", "blocked by", "cloudflare ray id",
+				"sucuri", "wordfence", "imunify360", "modsecurity",
+			}
+			
+			for _, sig := range wafSignatures {
+				if strings.Contains(content, sig) {
+					reason := fmt.Sprintf("WAF detected: status=%d, signature='%s', snippet='%s'", 
+						resp.StatusCode, sig, firstN(content, 100))
+					s.SetWAFDetected(reason)
+					return &ScanResult{Installed: false, Confidence: 0, ConfidenceReason: "WAF/Challenge detected"}
+				}
+			}
+			
+			// 403 for directory might still be a detection (plugin exists but blocked)
+			if resp.StatusCode == 403 && check.isDir {
+				if bestResult == nil || 55 > bestResult.Confidence {
+					bestResult = &ScanResult{
+						Installed:        true,
+						Path:             check.path,
+						CurrentVersion:   "",
+						Confidence:       55,
+						ConfidenceReason: "plugin directory exists (403 forbidden)",
+					}
+				}
+			}
+			continue
+		}
+
 		// Handle 403 for directory - plugin exists but access denied (common with Cloudflare)
 		if resp.StatusCode == 403 && check.isDir {
 			resp.Body.Close()
@@ -758,10 +874,12 @@ func (s *Scanner) CheckPluginExists(slug string) *ScanResult {
 			// For directory listing, verify it looks like a plugin directory
 			if check.isDir {
 				// Check if response contains typical plugin files/folders or is a valid response
-				// Also accept empty index.php responses (common in WordPress)
-				if strings.Contains(content, ".php") || strings.Contains(content, "readme") ||
+				// Accept: plugin files, readme, empty/small content (index.php), or slug name
+				isPluginDir := strings.Contains(content, ".php") || strings.Contains(content, "readme") ||
 					strings.Contains(content, "Index of") || strings.Contains(content, slug) ||
-					len(content) < 500 { // Small responses often indicate index.php placeholder
+					len(content) == 0 || len(content) < 500 // Empty or small = likely index.php redirect
+				
+				if isPluginDir {
 					confidence := check.confidence
 					reason := check.reason
 					
@@ -769,6 +887,8 @@ func (s *Scanner) CheckPluginExists(slug string) *ScanResult {
 					if strings.Contains(content, ".php") || strings.Contains(content, "readme") {
 						confidence = min(confidence+15, 85)
 						reason += " + plugin files visible"
+					} else if len(content) == 0 {
+						reason += " + empty response (index.php)"
 					}
 					
 					if bestResult == nil || confidence > bestResult.Confidence {
@@ -1034,6 +1154,12 @@ func (s *Scanner) RunScan() {
 		go func() {
 			defer wg.Done()
 			for plugin := range jobs {
+				// Check if WAF detected - skip remaining work
+				if s.ShouldStop() {
+					results <- &ScanResult{Installed: false, Confidence: 0}
+					continue
+				}
+				
 				result := s.ScanPlugin(plugin)
 				if result.Installed {
 					result.Slug = plugin.Slug
@@ -1132,9 +1258,27 @@ func (s *Scanner) RunScan() {
 	}
 
 	fmt.Printf("\n\n%s\n", strings.Repeat("=", 70))
-	fmt.Println("  SCAN COMPLETED")
+	
+	// Check if WAF was detected
+	if s.IsWAFDetected() {
+		fmt.Println("  ⚠️  SCAN STOPPED - WAF DETECTED")
+		fmt.Printf("%s\n", strings.Repeat("=", 70))
+		fmt.Printf("\n[!!!] WAF/Security Challenge detected!\n")
+		s.wafMu.Lock()
+		fmt.Printf("[!!!] Reason: %s\n", s.wafReason)
+		s.wafMu.Unlock()
+		fmt.Println("\n[*] Recommendations:")
+		fmt.Println("    - Use stealthy mode: -s")
+		fmt.Println("    - Reduce threads: -t 1 or -t 2")
+		fmt.Println("    - Add delay: -delay 1000 or higher")
+		fmt.Println("    - Try from different IP/VPN")
+		fmt.Println("    - Wait before retrying")
+	} else {
+		fmt.Println("  SCAN COMPLETED")
+	}
+	
 	fmt.Printf("%s\n", strings.Repeat("=", 70))
-	fmt.Printf("\n[*] Plugins checked: %d\n", len(s.plugins))
+	fmt.Printf("\n[*] Plugins checked: %d\n", processed)
 	fmt.Printf("[+] Plugins found: %d\n", foundCount)
 	fmt.Printf("[!] Vulnerable plugins: %d\n", vulnCount)
 
