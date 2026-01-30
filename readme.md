@@ -1,11 +1,12 @@
-# WP Plugin Scanner
+# WP Plugin Scanner v1.0.1
 
-All-in-one WordPress plugin scanner & wordlist generator. Detects installed plugins (even behind WAF/Cloudflare), supports fast/stealthy scan, and can collect plugin lists from WordPress.org.
+All-in-one WordPress plugin scanner & wordlist generator. Detects installed plugins (even behind WAF/Cloudflare), supports fast/stealthy scan, proxy support, and can collect plugin lists from WordPress.org.
 
 ## Features
 - Multi-threaded, ultra-fast scan (default 50 threads)
 - Stealthy mode: random UA, WAF bypass, IP spoofing, cache busting
 - Fast mode: 1 request per plugin (7x faster, lower confidence)
+- **Proxy support**: HTTP, HTTPS, SOCKS4, SOCKS5 (SSH tunnel compatible)
 - Custom wordlist and output support
 - Collect mode: tạo wordlist plugin từ WordPress.org (lọc theo số lượng cài đặt)
 
@@ -13,7 +14,7 @@ All-in-one WordPress plugin scanner & wordlist generator. Detects installed plug
 
 ### Scan Mode
 ```
-./wp_scanner -u <target_url> [-w wordlist] [-t threads] [-c custom_plugins] [-o output]
+./wp_scanner -u <target_url> [-w wordlist] [-t threads] [-c custom_plugins] [-o output] [-proxy url]
 ```
 
 ### Collect Mode (Tạo wordlist)
@@ -30,6 +31,7 @@ All-in-one WordPress plugin scanner & wordlist generator. Detects installed plug
 - `-t int`            : Số thread chạy song song (default: 50, nên giảm khi stealthy)
 - `-delay int`        : Delay giữa các request (ms, dùng cho stealthy/slow)
 - `-timeout int`      : Timeout mỗi request (giây, default: 10)
+- `-proxy string`     : Proxy URL (http, https, socks4, socks5)
 - `-s`, `-stealthy`   : Bật chế độ stealthy (random UA, WAF bypass, spoof IP, cache bust)
 - `-f`, `-fast`       : Bật chế độ fast (1 request/plugin, 7x nhanh hơn, độ chính xác thấp hơn)
 - `-collect`          : Chế độ collect (tạo wordlist từ WordPress.org)
@@ -81,6 +83,33 @@ All-in-one WordPress plugin scanner & wordlist generator. Detects installed plug
 ### Ultra stealth (WAF mạnh)
 ```
 ./wp_scanner -u https://protected-site.com/ -s -t 1 -delay 1000
+```
+
+### Scan qua Proxy
+
+#### SOCKS5 proxy (SSH tunnel: `ssh -D 9999 user@server`)
+```
+./wp_scanner -u https://example.com -proxy socks5://127.0.0.1:9999
+```
+
+#### HTTP proxy
+```
+./wp_scanner -u https://example.com -proxy http://127.0.0.1:8080
+```
+
+#### HTTPS proxy
+```
+./wp_scanner -u https://example.com -proxy https://proxy.example.com:8443
+```
+
+#### SOCKS4 proxy
+```
+./wp_scanner -u https://example.com -proxy socks4://127.0.0.1:1080
+```
+
+#### Stealthy + Proxy (ẩn danh tối đa)
+```
+./wp_scanner -u https://protected-site.com/ -s -f -t 10 -proxy socks5://127.0.0.1:9999
 ```
 
 ## Wordlist

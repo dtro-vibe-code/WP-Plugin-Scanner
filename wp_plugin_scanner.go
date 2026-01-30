@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 // ===================== STEALTH & WAF BYPASS =====================
@@ -224,6 +228,7 @@ type Scanner struct {
 	delay            time.Duration
 	stealthy         bool
 	fastMode         bool
+	proxyURL         string
 	client           *http.Client
 	plugins          []Plugin
 	pluginsData      map[string]Plugin
@@ -523,7 +528,7 @@ func loadVulnDatabase() map[string][]Vulnerability {
 
 // ===================== SCANNER =====================
 
-func NewScanner(target, wordlist, customFile, outputFile string, threads int, timeout int, delay int, stealthy bool, fastMode bool) *Scanner {
+func NewScanner(target, wordlist, customFile, outputFile string, threads int, timeout int, delay int, stealthy bool, fastMode bool, proxyURL string) *Scanner {
 	// Seed random once
 	rand.Seed(time.Now().UnixNano())
 	
@@ -541,6 +546,54 @@ func NewScanner(target, wordlist, customFile, outputFile string, threads int, ti
 		ForceAttemptHTTP2:   true,
 	}
 
+	// Configure proxy if specified
+	if proxyURL != "" {
+		parsedProxy, err := url.Parse(proxyURL)
+		if err != nil {
+			fmt.Printf("[!] Invalid proxy URL: %v\n", err)
+			os.Exit(1)
+		}
+
+		switch parsedProxy.Scheme {
+		case "http", "https":
+			// HTTP/HTTPS proxy
+			tr.Proxy = http.ProxyURL(parsedProxy)
+			fmt.Printf("[*] Using HTTP/HTTPS proxy: %s\n", proxyURL)
+		case "socks5", "socks5h":
+			// SOCKS5 proxy
+			auth := &proxy.Auth{}
+			if parsedProxy.User != nil {
+				auth.User = parsedProxy.User.Username()
+				auth.Password, _ = parsedProxy.User.Password()
+			} else {
+				auth = nil
+			}
+			dialer, err := proxy.SOCKS5("tcp", parsedProxy.Host, auth, proxy.Direct)
+			if err != nil {
+				fmt.Printf("[!] Failed to create SOCKS5 proxy: %v\n", err)
+				os.Exit(1)
+			}
+			tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
+			}
+			fmt.Printf("[*] Using SOCKS5 proxy: %s\n", proxyURL)
+		case "socks4", "socks4a":
+			// SOCKS4 proxy - use SOCKS5 dialer (compatible)
+			dialer, err := proxy.SOCKS5("tcp", parsedProxy.Host, nil, proxy.Direct)
+			if err != nil {
+				fmt.Printf("[!] Failed to create SOCKS4 proxy: %v\n", err)
+				os.Exit(1)
+			}
+			tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
+			}
+			fmt.Printf("[*] Using SOCKS4 proxy: %s\n", proxyURL)
+		default:
+			fmt.Printf("[!] Unsupported proxy scheme: %s (supported: http, https, socks4, socks5)\n", parsedProxy.Scheme)
+			os.Exit(1)
+		}
+	}
+
 	return &Scanner{
 		targetURL:        strings.TrimRight(target, "/"),
 		wordlistFile:     wordlist,
@@ -548,6 +601,7 @@ func NewScanner(target, wordlist, customFile, outputFile string, threads int, ti
 		outputFile:       outputFile,
 		stealthy:         stealthy,
 		fastMode:         fastMode,
+		proxyURL:         proxyURL,
 		threads:          threads,
 		timeout:          time.Duration(timeout) * time.Second,
 		delay:            time.Duration(delay) * time.Millisecond,
@@ -1119,9 +1173,12 @@ func (s *Scanner) ScanPlugin(plugin Plugin) *ScanResult {
 
 func (s *Scanner) RunScan() {
 	fmt.Printf("\n%s\n", strings.Repeat("=", 70))
-	fmt.Println("  WordPress Plugin Vulnerability Scanner")
+	fmt.Println("  WordPress Plugin Vulnerability Scanner v1.0.1")
 	fmt.Printf("  Target: %s\n", s.targetURL)
 	fmt.Printf("  Threads: %d | Timeout: %v | Delay: %v\n", s.threads, s.timeout, s.delay)
+	if s.proxyURL != "" {
+		fmt.Printf("  Proxy: %s\n", s.proxyURL)
+	}
 	
 	// Display mode info
 	modeInfo := []string{}
@@ -1130,6 +1187,9 @@ func (s *Scanner) RunScan() {
 	}
 	if s.fastMode {
 		modeInfo = append(modeInfo, "⚡ FAST")
+	}
+	if s.proxyURL != "" {
+		modeInfo = append(modeInfo, "🔒 PROXY")
 	}
 	if len(modeInfo) > 0 {
 		fmt.Printf("  Mode: %s\n", strings.Join(modeInfo, " + "))
@@ -1399,6 +1459,7 @@ func main() {
 	threads := flag.Int("t", 50, "Number of concurrent threads (default: 50, use 1-5 for slow mode)")
 	timeout := flag.Int("timeout", 10, "Request timeout in seconds")
 	delay := flag.Int("delay", 0, "Delay between requests in ms (for slow/stealth mode)")
+	proxyURL := flag.String("proxy", "", "Proxy URL (http://host:port, https://host:port, socks5://host:port, socks4://host:port)")
 	stealthy := flag.Bool("s", false, "Enable stealthy mode: random UA, WAF bypass, IP spoofing, cache busting")
 	flag.BoolVar(stealthy, "stealthy", false, "(Alias for -s) Enable stealthy mode")
 	fastMode := flag.Bool("f", false, "Fast mode: 1 request per plugin (7x faster, lower confidence)")
@@ -1409,14 +1470,14 @@ func main() {
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `
-WordPress Plugin Scanner - All-in-one Tool
-===========================================
+WordPress Plugin Scanner v1.0.1 - All-in-one Tool
+==================================================
 
 USAGE:
   %s [options]
 
 SCAN MODE:
-  %s -u <target_url> [-w wordlist] [-t threads] [-c custom_plugins] [-o output]
+  %s -u <target_url> [-w wordlist] [-t threads] [-c custom_plugins] [-o output] [-proxy url]
 
 COLLECT MODE (create wordlist):
   %s -collect [-min-installs 100] [-full]
@@ -1454,7 +1515,16 @@ EXAMPLES:
   # Ultra stealth for aggressive WAF
   %s -u https://protected-site.com/ -s -t 1 -delay 1000
 
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+  # Scan through SOCKS5 proxy (SSH tunnel)
+  %s -u https://example.com -proxy socks5://127.0.0.1:9999
+
+  # Scan through HTTP proxy
+  %s -u https://example.com -proxy http://127.0.0.1:8080
+
+  # Stealthy + Proxy (maximum anonymity)
+  %s -u https://protected-site.com/ -s -f -t 10 -proxy socks5://127.0.0.1:9999
+
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 	}
 
 	flag.Parse()
@@ -1502,6 +1572,6 @@ EXAMPLES:
 	}
 
 	// Run scanner
-	scanner := NewScanner(*targetURL, *wordlist, *customFile, *outputFile, *threads, *timeout, *delay, *stealthy, *fastMode)
+	scanner := NewScanner(*targetURL, *wordlist, *customFile, *outputFile, *threads, *timeout, *delay, *stealthy, *fastMode, *proxyURL)
 	scanner.RunScan()
 }
