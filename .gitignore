@@ -1,3 +1,37 @@
-.github/
-.gitignorego.mod
+# Build artifacts
+wp_scanner
+*.o
+*.a
+*.so
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Go
+vendor/
+go.mod
 go.sum
+
+# Logs & Output
+*.log
+*.txt.bak
+test_*.txt
+
+# System
+.github/
+.gitignore.bak
+*.tmp
+
+# Sensitive files
+secrets.txt
+config.local.json
+
+# Cache
+.cache/
+tmp/

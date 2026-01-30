@@ -113,7 +113,48 @@ All-in-one WordPress plugin scanner & wordlist generator. Detects installed plug
 ```
 
 ## Wordlist
-Sử dụng file wordlist mặc định `plugins.txt` hoặc tự tạo bằng collect mode. Có thể bổ sung plugin custom qua flag `-c`.
+
+Công cụ cung cấp 3 wordlist chính:
+
+### **plugins.txt** (WordPress.org API)
+- Chứa **tất cả plugins phổ biến** (>100 active installs) từ WordPress.org
+- Tối ưu cho scan nhanh, phát hiện plugins thường được sử dụng
+- Được tạo/cập nhật bằng lệnh: `./wp_scanner -collect`
+- Định dạng: `slug|name|version|active_installs`
+- Tổng plugins: ~18,000+
+
+### **customs.txt** (WPScan Wordlist)
+- Chứa wordlist từ công cụ **WPScan** (nổi tiếng trong pentesting)
+- Bao gồm cả plugins ít phổ biến, plugin đã lỗi thời, hoặc có lỗ hổng
+- Tối ưu để phát hiện plugin lạ, plugin nguy hiểm
+- Định dạng: `slug|name|version|active_installs` hoặc `slug` (một dòng một plugin)
+- Tổng plugins: ~20,000+
+
+### **plugins_all.txt** (Combined/Merged)
+- File **tổng hợp** từ `plugins.txt` + `customs.txt` (đã loại bỏ duplicates)
+- Đầy đủ nhất, phát hiện plugin tối đa nhưng scan chậm hơn
+- Sử dụng khi muốn comprehensive scan, bất kể WordPress.org hay wpscan có
+- Tổng plugins: ~35,000+
+
+### Cách sử dụng
+```bash
+# Dùng wordlist mặc định (plugins.txt)
+./wp_scanner -u https://example.com
+
+# Dùng WPScan wordlist
+./wp_scanner -u https://example.com -w customs.txt
+
+# Dùng full combined wordlist
+./wp_scanner -u https://example.com -w plugins_all.txt
+
+# Bổ sung plugin custom
+./wp_scanner -u https://example.com -c custom_plugins.txt
+
+# Tự tạo wordlist từ WordPress.org
+./wp_scanner -collect
+./wp_scanner -collect -min-installs 1000
+./wp_scanner -collect -full  # Collect tất cả (~70,000 plugins, rất lâu)
+```
 
 ## Build & Install
 
